@@ -1,0 +1,361 @@
+---
+title: "Why Observed = Predicted in Logistic Regression: A Property of Maximum Likelihood Estimation"
+author: "Reiko Okamoto"
+format: 
+  html:
+    embed-resources: true
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(rms)
+library(dplyr)
+library(gt)
+```
+
+# Introduction
+
+When fitting a logistic regression model, you may notice that the observed proportion of successes equals the average predicted probability across the whole data set and within subgroups defined by categorical variables. This isn't a coincidence or a sign of good fit; it's a **mathematical necessity** imposed by maximum likelihood estimation (MLE).
+
+This document demonstrates this phenomenon and explains the underlying mathematics.
+
+# Data set and Model
+
+We'll use the mtcars data set, expanded to provide more observations:
+
+```{r load_data}
+# Prepare mtcars data with sampling to increase sample size
+set.seed(123)
+mtcars_expanded <- mtcars[sample(1:nrow(mtcars), size = 200, replace = TRUE), ]
+rownames(mtcars_expanded) <- NULL
+
+mtcars_expanded$cyl <- factor(mtcars_expanded$cyl)
+mtcars_expanded$gear <- factor(mtcars_expanded$gear)
+
+cat("Dataset: mtcars (expanded with sampling, n =", nrow(mtcars_expanded), ")\n")
+cat("Outcome: am (transmission: 0 = automatic, 1 = manual)\n")
+cat("Predictors:\n")
+cat("  - mpg (continuous): miles per gallon\n")
+cat("  - hp (continuous): horsepower\n")
+cat("  - cyl (categorical): number of cylinders (4, 6, 8)\n")
+cat("  - gear (categorical): number of gears (3, 4, 5)\n")
+```
+
+## Fit the Model
+
+```{r fit_model}
+model <- lrm(am ~ mpg + hp + cyl + gear, 
+             data = mtcars_expanded, x = TRUE, y = TRUE)
+print(model)
+```
+
+```{r get_predictions}
+# Get predicted probabilities
+mtcars_expanded$pred_prob <- predict(model, type = "fitted")
+```
+
+# Part 1: Comparing Observed vs Predicted Proportions
+
+## Overall (Entire Dataset)
+
+```{r overall_comparison}
+obs_overall <- mean(mtcars_expanded$am)
+pred_overall <- mean(mtcars_expanded$pred_prob)
+
+comparison_overall <- data.frame(
+  Metric = c("Observed proportion", "Mean predicted probability", "Difference"),
+  Value = c(obs_overall, pred_overall, obs_overall - pred_overall)
+)
+
+gt(comparison_overall) %>%
+  fmt_number(columns = Value, decimals = 10) %>%
+  tab_header(title = "Overall: Observed vs Predicted")
+```
+
+**✓ MATCH!** The difference is effectively zero (within numerical precision).
+
+## By Cylinders (Categorical Variable)
+
+```{r by_cyl}
+by_cyl <- mtcars_expanded %>%
+  group_by(cyl) %>%
+  summarise(
+    n = n(),
+    observed = mean(am),
+    predicted = mean(pred_prob),
+    difference = observed - predicted,
+    .groups = "drop"
+  )
+
+gt(by_cyl) %>%
+  fmt_number(columns = c(observed, predicted, difference), decimals = 10) %>%
+  tab_header(title = "By Cylinders: Observed vs Predicted")
+```
+
+**✓ MATCH in each category!** Every difference is effectively zero.
+
+## By Gears (Categorical Variable)
+
+```{r by_gear}
+by_gear <- mtcars_expanded %>%
+  group_by(gear) %>%
+  summarise(
+    n = n(),
+    observed = mean(am),
+    predicted = mean(pred_prob),
+    difference = observed - predicted,
+    .groups = "drop"
+  )
+
+gt(by_gear) %>%
+  fmt_number(columns = c(observed, predicted, difference), decimals = 10) %>%
+  tab_header(title = "By Gears: Observed vs Predicted")
+```
+
+**✓ MATCH in each category!**
+
+## By MPG Quartiles (Continuous Variable)
+
+```{r by_mpg}
+mtcars_expanded$mpg_quartile <- cut(mtcars_expanded$mpg,
+                            breaks = quantile(mtcars_expanded$mpg, probs = seq(0, 1, 0.25)),
+                            labels = c("Q1", "Q2", "Q3", "Q4"),
+                            include.lowest = TRUE)
+
+by_mpg <- mtcars_expanded %>%
+  group_by(mpg_quartile) %>%
+  summarise(
+    n = n(),
+    observed = mean(am),
+    predicted = mean(pred_prob),
+    difference = observed - predicted,
+    .groups = "drop"
+  )
+
+gt(by_mpg) %>%
+  fmt_number(columns = c(observed, predicted, difference), decimals = 10) %>%
+  tab_header(title = "By MPG Quartiles: Observed vs Predicted")
+```
+
+**✗ NO MATCH!** The differences are not all zero.
+
+## By Horsepower Quartiles (Continuous Variable)
+
+```{r by_hp}
+mtcars_expanded$hp_quartile <- cut(mtcars_expanded$hp,
+                           breaks = quantile(mtcars_expanded$hp, probs = seq(0, 1, 0.25)),
+                           labels = c("Q1", "Q2", "Q3", "Q4"),
+                           include.lowest = TRUE)
+
+by_hp <- mtcars_expanded %>%
+  group_by(hp_quartile) %>%
+  summarise(
+    n = n(),
+    observed = mean(am),
+    predicted = mean(pred_prob),
+    difference = observed - predicted,
+    .groups = "drop"
+  )
+
+gt(by_hp) %>%
+  fmt_number(columns = c(observed, predicted, difference), decimals = 10) %>%
+  tab_header(title = "By Horsepower Quartiles: Observed vs Predicted")
+```
+
+**✗ NO MATCH!** The differences are not all zero.
+
+# Part 2: The Mathematical Explanation
+
+## Maximum Likelihood Estimation
+
+**Maximum Likelihood Estimation (MLE)** is a method for finding the coefficients ($\beta$ values) that make the observed data most probable under the logistic regression model. Specifically, we find the $\beta$ values that maximize the log-likelihood.
+
+## The Log-Likelihood Function
+
+For logistic regression with $K$ observations, the log-likelihood is:
+
+$$
+\ell(\beta) = \sum_{k=1}^{K} y_k \log(p(x_k)) + \sum_{k=1}^{K} (1-y_k) \log(1-p(x_k))
+$$
+
+where:
+
+-   $y_k$ is the observed outcome (0 or 1) for observation $k$
+-   $p(x_k) = \frac{1}{1 + e^{-x_k\beta}}$ is the predicted probability for observation $k$
+-   $x_k$ is the vector of explanatory variables for observation $k$
+-   $\beta$ is the vector of coefficients we're trying to estimate
+
+## The Score Equations
+
+To find the $\beta$ values that maximize the log-likelihood, we take the derivative with respect to **each** coefficient $\beta_m$ (where $m$ indexes the specific coefficient: intercept, first predictor, second predictor, etc.) and set it equal to zero:
+
+$$
+\frac{\partial \ell}{\partial \beta_m} = 0 = \sum_{k=1}^{K} y_k x_{mk} - \sum_{k=1}^{K} p(x_k) x_{mk}
+$$
+
+where:
+
+-   $y_k$ is the observed outcome (0 or 1) for observation $k$
+-   $x_{mk}$ is the value of the $m$-th predictor variable for observation $k$
+-   $p(x_k)$ is the predicted probability for observation $k$
+
+This can be rewritten as:
+
+$$
+\sum_{k=1}^{K} x_{mk}(y_k - p(x_k)) = 0
+$$
+
+**We must solve this equation for every coefficient in the model simultaneously.** The solution to this system of equations gives us the MLE estimates.
+
+Let's verify that these equations are satisfied for our fitted model:
+
+```{r verify_scores}
+y <- mtcars_expanded$am
+p <- mtcars_expanded$pred_prob
+
+# Calculate score for each coefficient
+scores_df <- data.frame(
+  Parameter = c("Intercept", "mpg", "hp", "cyl=6", "cyl=8", "gear=4", "gear=5"),
+  Score = c(
+    sum(y - p),                                          # Intercept
+    sum(mtcars_expanded$mpg * (y - p)),                 # mpg
+    sum(mtcars_expanded$hp * (y - p)),                  # hp
+    sum((mtcars_expanded$cyl == "6") * (y - p)),        # cyl=6
+    sum((mtcars_expanded$cyl == "8") * (y - p)),        # cyl=8
+    sum((mtcars_expanded$gear == "4") * (y - p)),       # gear=4
+    sum((mtcars_expanded$gear == "5") * (y - p))        # gear=5
+  )
+)
+
+gt(scores_df) %>%
+  fmt_scientific(columns = Score, decimals = 2) %>%
+  tab_header(title = "Score equations: All should be ≈ 0")
+```
+
+All scores are effectively zero, confirming that the MLE solution has been found.
+
+## Why Overall Observed = Predicted
+
+The derivative with respect to the **intercept** $\beta_0$ is special because $x_{0k} = 1$ for all observations:
+
+$$
+\frac{\partial \ell}{\partial \beta_0} = \sum_{k=1}^{K} 1 \cdot (y_k - p(x_k)) = \sum_{k=1}^{K} (y_k - p(x_k)) = 0
+$$
+
+At the MLE solution, this must equal zero, which means:
+
+$$
+\sum_{k=1}^{K} y_k = \sum_{k=1}^{K} p(x_k)
+$$
+
+Dividing both sides by $K$:
+
+$$
+\frac{1}{K}\sum_{k=1}^{K} y_k = \frac{1}{K}\sum_{k=1}^{K} p(x_k)
+$$
+
+$$
+\text{mean(observed)} = \text{mean(predicted)} \quad ✓
+$$
+
+```{r verify_intercept}
+score_intercept <- sum(y - p)
+cat(sprintf("Score for intercept: %.2e (should be ≈ 0)\n", score_intercept))
+cat(sprintf("This forces: mean(y) = mean(p)\n"))
+cat(sprintf("  mean(y) = %.10f\n", mean(y)))
+cat(sprintf("  mean(p) = %.10f\n", mean(p)))
+```
+
+## Why Categorical Subgroups: Observed = Predicted
+
+For a categorical variable with multiple categories, we use dummy variables. Consider category $j$ with its corresponding coefficient $\beta_j$. The indicator variable $x_{jk}$ equals 1 if observation $k$ is in category $j$, 0 otherwise.
+
+The derivative with respect to $\beta_j$ is:
+
+$$
+\frac{\partial \ell}{\partial \beta_j} = \sum_{k=1}^{K} x_{jk}(y_k - p(x_k)) = 0
+$$
+
+Since $x_{jk} = 1$ only for observations in category j and $x_{jk} = 0$ for all other observations:
+
+$$
+\sum_{k \in \text{category } j} (y_k - p(x_k)) = 0
+$$
+
+Therefore:
+
+$$
+\sum_{k \in \text{category } j} y_k = \sum_{k \in \text{category } j} p(x_k)
+$$
+
+$$
+\text{mean(observed in j)} = \text{mean(predicted in j)} \quad ✓
+$$
+
+**This holds for EVERY category**, including the reference category (whose constraint comes from the intercept term plus the fact that all other category coefficients must be zero when observations are in the reference category).
+
+```{r verify_categorical}
+# Verify for cyl = "6" (has its own dummy variable)
+cyl_6 <- mtcars_expanded$cyl == "6"
+sum_diff_cyl6 <- sum((y - p)[cyl_6])
+
+cat(sprintf("For cyl='6':\n"))
+cat(sprintf("  Σ(y - p) = %.2e\n", sum_diff_cyl6))
+cat(sprintf("  Observed mean = %.10f\n", mean(y[cyl_6])))
+cat(sprintf("  Predicted mean = %.10f\n", mean(p[cyl_6])))
+```
+
+## Why Continuous Variables: Observed ≠ Predicted (in arbitrary subgroups)
+
+For a continuous variable (like mpg or hp) with coefficient $\beta_m$, the value $x_{mk}$ is the **actual observed value** of that variable for observation $k$ (not an indicator like with categorical variables).
+
+The derivative with respect to $\beta_m$ is:
+
+$$
+\frac{\partial \ell}{\partial \beta_m} = \sum_{k=1}^{K} x_{mk}(y_k - p(x_k)) = 0
+$$
+
+This constraint can be rearranged as:
+
+$$
+\sum_{k=1}^{K} x_{mk} \cdot y_k = \sum_{k=1}^{K} x_{mk} \cdot p(x_k)
+$$
+
+The constraint says: "The sum of observed outcomes multiplied by their covariate values equals the sum of predicted probabilities multiplied by their covariate values."
+
+**This does NOT force the unweighted sums to be equal within arbitrary subgroups.** When we create quartiles or other groupings of a continuous variable, we're imposing an arbitrary partition. The constraint ensures the weighted sums match globally, but provides no guarantee about unweighted sums within subgroups we define.
+
+```{r verify_continuous}
+# The weighted constraint DOES hold for mpg
+score_mpg <- sum(mtcars_expanded$mpg * (y - p))
+
+cat("For mpg (continuous):\n")
+cat(sprintf("  Σ mpg × (y - p) = %.2e ✓ (weighted sum = 0)\n\n", score_mpg))
+
+# But within quartiles, unweighted sums don't equal zero
+cat("But within each quartile of mpg (unweighted sums):\n")
+for (q in c("Q1", "Q2", "Q3", "Q4")) {
+  in_quartile <- mtcars_expanded$mpg_quartile == q
+  sum_diff <- sum((y - p)[in_quartile])
+  cat(sprintf("  %s: Σ(y - p) = %.6f \n", q, sum_diff))
+}
+```
+
+# Part 3: Practical Implications
+
+## Why This Comparison Isn't Informative on Training Data
+
+On the data used to fit the model:
+
+-   **Observed = Predicted overall** (by mathematical necessity from $\partial \ell / \partial \beta_0 = 0$)
+-   **Observed = Predicted within categorical subgroups** (by mathematical necessity from $\partial \ell / \partial \beta_j = 0$ for each category)
+
+These equalities are just inherent characteristics of the optimization.
+
+Comparing observed vs predicted proportions is much more informative when applied to:
+
+-   **Validation/test sets**: Data not used for model fitting, where differences reveal bias in predictions
+-   **External validation**: Different populations or settings, where differences reveal generalizability
+
+In these contexts, the MLE constraints no longer apply, and observed vs predicted comparisons may be more meaningful assessments of model performance.
+
+# 
